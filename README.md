@@ -26,3 +26,23 @@ your Codex sites by simply issuing `codex stop`.
 
 `codex sites` will give you a list of all of your configured
 sites.
+
+What Will It Do?
+----------------
+
+I have plans for `codex`.  Big plans.
+
+In the future, `codex` will help manage your cloud-config and
+runtime-configs using a common interface and a simplified file
+format.  For example, the common case of cutting up a large
+network into smaller, CIDR-coherent networks is something a tool
+should do.  That tool can be `codex`.
+
+In the future, `codex` will help you map out what you've got and
+what you still need to deploy a complete Codex installation.  Do
+you have SHIELD?  Are there concourse workers for each of your
+environment BOSHes?  Did you deploy all the jumpboxen you need?o
+
+In the future `codex` may even completely wrap Genesis, and let
+you manage and deploy all of your systems and infrastructure from
+a single git repository.  Who knows?
