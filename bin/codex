@@ -21,55 +21,55 @@ codex_needconfig() {
 	fi
 }
 
-codex_envs() {
+codex_sites() {
 	codex_needconfig
 	pushd $CONFIG_ROOT >/dev/null 2>&1
-	for file in *.env; do
-		echo ${file%.env}
+	for file in *.site; do
+		echo ${file%.site}
 	done
 	popd >/dev/null 2>&1
 }
 
 codex_stop_all() {
-	for env in "$(codex_envs)"; do
-		if [[ -n "${env}" ]]; then
-			codex_stop "$env"
+	for site in "$(codex_sites)"; do
+		if [[ -n "${site}" ]]; then
+			codex_stop "$site"
 		fi
 	done
 }
 codex_stop() {
-	local env=${1:-}
-	if [[ -z "$env" ]]; then
-		bug "codex_stop() requires an environment name as an arguemtn, but was not given one"
+	local site=${1:-}
+	if [[ -z "$site" ]]; then
+		bug "codex_stop() requires an site name as an argumentn, but was not given one"
 	fi
 	if [[ -n "${2:-}" ]]; then
 		bug "too many arguments given to codex_stop(); got ($*)"
 	fi
 
-	if [[ -f "$CONFIG_ROOT/$env.env/vault.pid" ]]; then
-		local pid=$(cat "$CONFIG_ROOT/$env.env/vault.pid")
-		echo "Stopping Codex $env Vault (pid $pid)..."
+	if [[ -f "$CONFIG_ROOT/$site.site/vault.pid" ]]; then
+		local pid=$(cat "$CONFIG_ROOT/$site.site/vault.pid")
+		echo "Stopping Codex $site Vault (pid $pid)..."
 		kill -TERM "$pid" || true
-		rm -f $CONFIG_ROOT/$env.env/vault.pid
+		rm -f $CONFIG_ROOT/$site.site/vault.pid
 	else
-		echo "Codex $env Vault is stopped."
+		echo "Codex $site Vault is stopped."
 	fi
 }
 
 codex_switchto() {
-	local env=${1:-}
-	if [[ -z "$env" ]]; then
-		bug "codex_switchto() requires an environment name as an arguemtn, but was not given one"
+	local site=${1:-}
+	if [[ -z "$site" ]]; then
+		bug "codex_switchto() requires an site name as an argumentn, but was not given one"
 	fi
 	if [[ -n "${2:-}" ]]; then
 		bug "too many arguments given to codex_switchto(); got ($*)"
 	fi
 
 	codex_needconfig
-	if [[ ! -d "$CONFIG_ROOT/$env.env" ]]; then
-		echo "Setting up new environment $env..."
-		mkdir "$CONFIG_ROOT/$env.env"
-		pushd $CONFIG_ROOT/$env.env 2>&1 >/dev/null
+	if [[ ! -d "$CONFIG_ROOT/$site.site" ]]; then
+		echo "Setting up new site $site..."
+		mkdir "$CONFIG_ROOT/$site.site"
+		pushd $CONFIG_ROOT/$site.site 2>&1 >/dev/null
 			local addr="127.0.0.1:$(( ( RANDOM % 10000 ) + 8200 ))"
 			echo "$addr" >vault.addr
 			cat >vault.hcl <<EOF
@@ -93,46 +93,46 @@ EOF
 			sleep 1
 
 			export VAULT_ADDR=http://$addr
-			safe target "codex-$env" "$VAULT_ADDR"
+			safe target "codex-$site" "$VAULT_ADDR"
 			if ! safe init --single --json > vault.keys; then
-				rm -rf "$CONFIG_ROOT/$env.env"
+				rm -rf "$CONFIG_ROOT/$site.site"
 				kill -TERM $vault_pid
 				bail "!!! unable to initialize the vault.  bailing out."
 			fi
 
-			safe set secret/codex dated="$(date)" env="$env" owner="$(whoami)" >/dev/null 2>&1
+			safe set secret/codex dated="$(date)" site="$site" owner="$(whoami)" >/dev/null 2>&1
 		popd 2>&1 >/dev/null
 	else
-		pushd $CONFIG_ROOT/$env.env 2>&1 >/dev/null
+		pushd $CONFIG_ROOT/$site.site 2>&1 >/dev/null
 			if [[ -f vault.pid ]]; then
 				if ! kill -0 $(cat vault.pid) >/dev/null 2>&1; then
 					rm -f vault.pid
 				fi
 			fi
 			if [[ ! -f vault.pid ]]; then
-				echo "Starting up $env Vault..."
+				echo "Starting up $site Vault..."
 				vault server -config ./vault.hcl >> vault.log 2>&1 &
 				echo "$!" >vault.pid
 
-				echo "Unsealing $env Vault..."
+				echo "Unsealing $site Vault..."
 				safe vault unseal $(jq -r '.seal_keys[0]' <vault.keys)
 				echo
 
 			else
-				echo "Codex $env Vault is already running (pid $(cat vault.pid))..."
+				echo "Codex $site Vault is already running (pid $(cat vault.pid))..."
 			fi
 
-			safe target "codex-$env"
+			safe target "codex-$site"
 			safe read secret/codex
 		popd 2>&1 >/dev/null
 	fi
 	rm -f $CONFIG_ROOT/current
-	ln -sf "$env.env" $CONFIG_ROOT/current
+	ln -sf "$site.site" $CONFIG_ROOT/current
 }
 
-codex_list_envs() {
+codex_list_sites() {
 	if [[ -n "${1:-}" ]]; then
-		bug "too many arguments given to codex_envs(); got ($*)"
+		bug "too many arguments given to codex_list_sites(); got ($*)"
 	fi
 
 	codex_needconfig
@@ -140,9 +140,9 @@ codex_list_envs() {
 	(
 		echo "Environment|Configuration"
 		echo "-----------|-------------"
-		for file in *.env; do
-			env=${file%.env}
-			echo "$env|~/.codex/$file"
+		for file in *.site; do
+			site=${file%.site}
+			echo "$site|~/.codex/$file"
 		done
 	) | column -t -s'|'
 	popd >/dev/null 2>&1
@@ -154,18 +154,18 @@ help)
 	cat <<EOF
 USAGE: codex [command] [OPTIONS]
 
-To get start with codex, run \`codex start ENV\`, using some memorable name
-for the environment you are trying to start up.  For example, 'lab' is a
-good ENV name.
+To get start with codex, run \`codex start SITE\`, using some memorable name
+for the site you are trying to start up.  For example, 'lab' is a good SITE
+name.
 
-If you've already got some environments started, \`codex envs\` will list
-them out for you, so you can pick which one you want to work with via a
-\`codex is ENV\` command.
+If you've already got some sites started, \`codex sites\` will list them out
+for you, so you can pick which one you want to work with via a \`codex is
+SITE\` command.
 
 EOF
 	;;
-envs)
-	codex_list_envs
+sites)
+	codex_list_sites
 	;;
 start)
 	codex_switchto "$2"
