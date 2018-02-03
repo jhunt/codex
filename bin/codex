@@ -1,0 +1,189 @@
+#!/bin/bash
+set -u
+shopt -s nullglob
+
+CONFIG_ROOT=$HOME/.codex
+
+bail() {
+	echo >&2 $*
+	exit 2
+}
+bug() {
+	echo >&2 $* " - this is a bug in codex"
+	exit 2
+}
+
+CODEX_HAVE_CONFIG=0
+codex_needconfig() {
+	if [[ $CODEX_HAVE_CONFIG -eq 0 ]]; then
+		mkdir -p $CONFIG_ROOT
+		CODEX_HAVE_CONFIG=1
+	fi
+}
+
+codex_envs() {
+	codex_needconfig
+	pushd $CONFIG_ROOT >/dev/null 2>&1
+	for file in *.env; do
+		echo ${file%.env}
+	done
+	popd >/dev/null 2>&1
+}
+
+codex_stop_all() {
+	for env in "$(codex_envs)"; do
+		if [[ -n "${env}" ]]; then
+			codex_stop "$env"
+		fi
+	done
+}
+codex_stop() {
+	local env=${1:-}
+	if [[ -z "$env" ]]; then
+		bug "codex_stop() requires an environment name as an arguemtn, but was not given one"
+	fi
+	if [[ -n "${2:-}" ]]; then
+		bug "too many arguments given to codex_stop(); got ($*)"
+	fi
+
+	if [[ -f "$CONFIG_ROOT/$env.env/vault.pid" ]]; then
+		local pid=$(cat "$CONFIG_ROOT/$env.env/vault.pid")
+		echo "Stopping Codex $env Vault (pid $pid)..."
+		kill -TERM "$pid" || true
+		rm -f $CONFIG_ROOT/$env.env/vault.pid
+	else
+		echo "Codex $env Vault is stopped."
+	fi
+}
+
+codex_switchto() {
+	local env=${1:-}
+	if [[ -z "$env" ]]; then
+		bug "codex_switchto() requires an environment name as an arguemtn, but was not given one"
+	fi
+	if [[ -n "${2:-}" ]]; then
+		bug "too many arguments given to codex_switchto(); got ($*)"
+	fi
+
+	codex_needconfig
+	if [[ ! -d "$CONFIG_ROOT/$env.env" ]]; then
+		echo "Setting up new environment $env..."
+		mkdir "$CONFIG_ROOT/$env.env"
+		pushd $CONFIG_ROOT/$env.env 2>&1 >/dev/null
+			local addr="127.0.0.1:$(( ( RANDOM % 10000 ) + 8200 ))"
+			echo "$addr" >vault.addr
+			cat >vault.hcl <<EOF
+listener "tcp" {
+  address     = "$addr"
+  tls_disable = 1
+}
+backend "file" {
+  path = "./vault.data"
+}
+EOF
+			cat >vault.sh <<EOF
+#!/bin/bash
+vault server -config vault.hcl
+EOF
+
+			echo "Initializing local Vault on $addr..."
+			vault server -config ./vault.hcl >> vault.log 2>&1 &
+			local vault_pid=$!
+			echo "$vault_pid" >vault.pid
+			sleep 1
+
+			export VAULT_ADDR=http://$addr
+			safe target "codex-$env" "$VAULT_ADDR"
+			if ! safe init --single --json > vault.keys; then
+				rm -rf "$CONFIG_ROOT/$env.env"
+				kill -TERM $vault_pid
+				bail "!!! unable to initialize the vault.  bailing out."
+			fi
+
+			safe set secret/codex dated="$(date)" env="$env" owner="$(whoami)" >/dev/null 2>&1
+		popd 2>&1 >/dev/null
+	else
+		pushd $CONFIG_ROOT/$env.env 2>&1 >/dev/null
+			if [[ -f vault.pid ]]; then
+				if ! kill -0 $(cat vault.pid) >/dev/null 2>&1; then
+					rm -f vault.pid
+				fi
+			fi
+			if [[ ! -f vault.pid ]]; then
+				echo "Starting up $env Vault..."
+				vault server -config ./vault.hcl >> vault.log 2>&1 &
+				echo "$!" >vault.pid
+
+				echo "Unsealing $env Vault..."
+				safe vault unseal $(jq -r '.seal_keys[0]' <vault.keys)
+				echo
+
+			else
+				echo "Codex $env Vault is already running (pid $(cat vault.pid))..."
+			fi
+
+			safe target "codex-$env"
+			safe read secret/codex
+		popd 2>&1 >/dev/null
+	fi
+	rm -f $CONFIG_ROOT/current
+	ln -sf "$env.env" $CONFIG_ROOT/current
+}
+
+codex_list_envs() {
+	if [[ -n "${1:-}" ]]; then
+		bug "too many arguments given to codex_envs(); got ($*)"
+	fi
+
+	codex_needconfig
+	pushd $CONFIG_ROOT >/dev/null 2>&1
+	(
+		echo "Environment|Configuration"
+		echo "-----------|-------------"
+		for file in *.env; do
+			env=${file%.env}
+			echo "$env|~/.codex/$file"
+		done
+	) | column -t -s'|'
+	popd >/dev/null 2>&1
+}
+
+command=${1:-help}
+case "$command" in
+help)
+	cat <<EOF
+USAGE: codex [command] [OPTIONS]
+
+To get start with codex, run \`codex start ENV\`, using some memorable name
+for the environment you are trying to start up.  For example, 'lab' is a
+good ENV name.
+
+If you've already got some environments started, \`codex envs\` will list
+them out for you, so you can pick which one you want to work with via a
+\`codex is ENV\` command.
+
+EOF
+	;;
+envs)
+	codex_list_envs
+	;;
+start)
+	codex_switchto "$2"
+	;;
+stop)
+	if [[ -z "${2:-}" ]]; then
+		codex_stop_all
+	else
+		codex_stop "$2"
+	fi
+	;;
+is)
+	codex_switchto "$2"
+	safe tree
+	;;
+*)
+	echo >&2 "unrecognized codex command '$command'"
+	exit 1;
+	;;
+esac
+exit 0
